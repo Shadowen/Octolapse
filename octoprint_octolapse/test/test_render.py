@@ -35,6 +35,7 @@ from tempfile import mkdtemp, NamedTemporaryFile
 
 from PIL import Image
 from mock import Mock
+from twisted.python.modules import getModule
 
 from octoprint_octolapse.render import TimelapseRenderJob, Render, Rendering
 from octoprint_octolapse.settings import OctolapseSettings
@@ -76,29 +77,31 @@ class TestRender(unittest.TestCase):
         image.save(watermark_file, 'JPEG')
         return watermark_file
 
-    def createRenderingJob(self, rendering):
+    def createRenderingJob(self, **kwargs):
         self.on_render_start = Mock(return_value=None)
         self.on_render_success = Mock(return_value=None)
         self.on_render_error = Mock(return_value=None)
-        return TimelapseRenderJob(job_id=self.rendering_job_id,
-                                  rendering=rendering,
-                                  debug=self.octolapse_settings.current_debug_profile(),
-                                  print_filename=self.print_name,
-                                  capture_dir=self.snapshot_dir_path,
-                                  snapshot_filename_format=self.capture_template,
-                                  output_tokens=Render._get_output_tokens(self.data_directory, "COMPLETED",
-                                                                          self.print_name,
-                                                                          self.print_start_time,
-                                                                          self.print_end_time),
-                                  octoprint_timelapse_folder=self.octoprint_timelapse_folder,
-                                  ffmpeg_path=self.ffmpeg_path,
-                                  threads=1,
-                                  time_added=0,
-                                  on_render_start=self.on_render_start,
-                                  on_success=self.on_render_success,
-                                  on_error=self.on_render_error,
-                                  clean_after_success=True,
-                                  clean_after_fail=True)
+        job_kwargs = dict(job_id=self.rendering_job_id,
+                          rendering=None,
+                          debug=self.octolapse_settings.current_debug_profile(),
+                          print_filename=self.print_name,
+                          capture_dir=self.snapshot_dir_path,
+                          snapshot_filename_format=self.capture_template,
+                          output_tokens=Render._get_output_tokens(self.data_directory, "COMPLETED",
+                                                                  self.print_name,
+                                                                  self.print_start_time,
+                                                                  self.print_end_time),
+                          octoprint_timelapse_folder=self.octoprint_timelapse_folder,
+                          ffmpeg_path=self.ffmpeg_path,
+                          threads=1,
+                          time_added=0,
+                          on_render_start=self.on_render_start,
+                          on_success=self.on_render_success,
+                          on_error=self.on_render_error,
+                          clean_after_success=False,
+                          clean_after_fail=False)
+        job_kwargs.update(kwargs)
+        return TimelapseRenderJob(**job_kwargs)
 
     def doTestCodec(self, name, extension, codec_name):
         """
@@ -135,6 +138,8 @@ class TestRender(unittest.TestCase):
         self.assertEqual(actual_codec, codec_name)
 
     def setUp(self):
+        self.test_resources_path = os.path.join(getModule(__name__).filePath.parent().path, 'resources')
+
         self.octolapse_settings = OctolapseSettings(NamedTemporaryFile().name)
         self.rendering_job_id = "job_id"
 
@@ -143,6 +148,7 @@ class TestRender(unittest.TestCase):
         self.print_end_time = 100
 
         # Create fake snapshots.
+        self.snapshot_dir_path = None
         self.capture_template = get_snapshot_filename(self.print_name, self.print_start_time, SnapshotNumberFormat)
         self.data_directory = mkdtemp()
         self.octoprint_timelapse_folder = mkdtemp()
@@ -152,14 +158,15 @@ class TestRender(unittest.TestCase):
         self.render_task_queue.put(self.rendering_job_id)
 
     def tearDown(self):
-        rmtree(self.snapshot_dir_path)
+        if self.snapshot_dir_path is not None:
+            rmtree(self.snapshot_dir_path)
         rmtree(self.data_directory)
         rmtree(self.octoprint_timelapse_folder)
 
     def test_basicRender(self):
         self.snapshot_dir_path = TestRender.createSnapshotDir(10, self.capture_template, size=(50, 50))
         # Create the job.
-        job = self.createRenderingJob(rendering=None)
+        job = self.createRenderingJob()
 
         # Start the job.
         job._render()
@@ -180,7 +187,7 @@ class TestRender(unittest.TestCase):
         self.snapshot_dir_path = TestRender.createSnapshotDir(10, self.capture_template, size=(50, 50),
                                                               write_metadata=False)
         # Create the job.
-        job = self.createRenderingJob(rendering=None)
+        job = self.createRenderingJob()
 
         # Start the job.
         job._render()
@@ -201,7 +208,7 @@ class TestRender(unittest.TestCase):
         self.snapshot_dir_path = TestRender.createSnapshotDir(10, self.capture_template, size=(50, 50),
                                                               write_metadata=False)
         # Create the job.
-        job = self.createRenderingJob(rendering=None)
+        job = self.createRenderingJob()
         job._ffmpeg = None
 
         # Start the job.
@@ -309,3 +316,54 @@ class TestRender(unittest.TestCase):
         self.on_render_error.assert_called_once()
         output_files = os.listdir(self.octoprint_timelapse_folder)
         self.assertEqual(len(output_files), 0, "Expected no output files to be generated.".format(output_files))
+
+    def test_real_data(self):
+        import numpy as np
+        from matplotlib import pyplot as plt
+        import cv2
+
+        capture_dir = self.test_resources_path
+        snapshot_filename_format = os.path.join('snapshots_1', 'image%06d.jpg')
+
+        def plot_brightness(dir):
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+
+            x = np.arange(139)
+            brightness = np.zeros([139])
+            line1, = ax.plot(x, brightness)  # Returns a tuple of line objects, thus the comma
+            plt.ylim(0,255)
+            for i in range(139):
+                img = cv2.imread(os.path.join(dir, snapshot_filename_format % i))
+                img = cv2.resize(img, dsize=(img.shape[1]/2,img.shape[0]/2))
+                lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+                L = lab[:, :, 0]
+                A = lab[:, :, 1]
+                B = lab[:, :, 2]
+                cv2.imshow("original", img)
+                cv2.imshow("lab", np.hstack([np.tile(np.expand_dims(L,3), [1,1,3]),np.tile(np.expand_dims(A,3), [1,1,3]),np.tile(np.expand_dims(B,3), [1,1,3])]))
+                brightness[i] = np.mean(L)
+
+                line1.set_ydata(brightness)
+                plt.pause(0.001)
+                cv2.waitKey(100)
+            return brightness
+
+        # plot_brightness(capture_dir)
+
+        # Create the job.
+        job = self.createRenderingJob(capture_dir=capture_dir,
+                                      snapshot_filename_format=snapshot_filename_format,
+                                      octoprint_timelapse_folder='/home/wesley/data/render'
+                                      )
+
+        # Start the job.
+        job._render()
+
+        plot_brightness(job.temp_rendering_dir)
+
+        # Assertions.
+        self.on_render_start.assert_called_once()
+        self.on_render_success.assert_called_once()
+        self.on_render_error.assert_not_called()
+

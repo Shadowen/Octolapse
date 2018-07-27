@@ -28,11 +28,13 @@ import shutil
 import sys
 import threading
 import time
+from collections import deque
 from csv import DictReader
 # sarge was added to the additional requirements for the plugin
 from datetime import datetime, timedelta
 from tempfile import mkdtemp
 
+import cv2
 import sarge
 from PIL import Image, ImageDraw, ImageFont
 
@@ -480,17 +482,125 @@ class TimelapseRenderJob(object):
 
     def _preprocess_images(self, preprocessed_directory):
         self._debug.log_render_start("Starting preprocessing of images.")
+
+        # Find and create the correct directory for the preprocessed images.
+        preprocessed_path_template = os.path.join(preprocessed_directory, self._snapshot_filename_template)
+        preprocessed_dir = os.path.dirname(preprocessed_path_template)
+        if not os.path.exists(preprocessed_dir):
+            os.makedirs(preprocessed_dir)
+
+        # Copy images over to a temporary directory.
+        for i in range(self._imageCount):
+            shutil.copy(os.path.join(self._capture_dir, self._snapshot_filename_template % i), preprocessed_path_template % i)
+
         if self._snapshot_metadata is None:
             self._debug.log_error("Snapshot metadata file missing; skipping preprocessing.")
-            # Just copy images over.
-            for i in range(self._imageCount):
-                file_path = os.path.join(self._capture_dir, self._snapshot_filename_template % i)
-                output_path = os.path.join(preprocessed_directory, self._snapshot_filename_template % i)
-                output_dir = os.path.dirname(output_path)
-                if not os.path.exists(output_dir):
-                    os.makedirs(output_dir)
-                shutil.move(file_path, output_path)
             return
+
+        # OpenCV flicker reduction.
+        self._reduce_flicker(input_path_template=preprocessed_path_template,
+                                 output_path_template=preprocessed_path_template)
+        # Pillow overlay.
+        self._overlay_all_images(input_path_template=preprocessed_path_template,
+                                 output_path_template=preprocessed_path_template)
+        self._debug.log_render_start("Preprocessing success!")
+
+    def _reduce_flicker(self, input_path_template, output_path_template, smoothing_window=5):
+        from matplotlib import pyplot as plt
+        import numpy as np
+        if smoothing_window % 2 == 0:
+            raise RenderError('flicker-reduction', "Smoothing window must be odd! {} was provided.".format(smoothing_window))
+        middle_index = int(math.floor(smoothing_window / 2))
+
+        im = cv2.imread(input_path_template % 0)
+        # roi = cv2.selectROI(im, fromCenter=False, showCrosshair=False) # TODO(Shadowen): Interface to allow user to select.
+        roi = (382, 203, 98, 196)
+        # Plot brightness
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        x = np.tile(np.expand_dims(np.arange(139), 1), (1, 3))
+        brightnesses = np.zeros([139, 3])
+        lines = ax.plot(x, brightnesses)  # Returns a tuple of line objects, thus the comma
+        plt.ylim(0, 255)
+        for i in range(139):
+            img = cv2.imread(input_path_template % i)
+            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            imCrop = lab[int(roi[1]):int(roi[1] + roi[3]), int(roi[0]):int(roi[0] + roi[2])]
+            brightnesses[i,0] = np.mean(imCrop[:, :, 0])
+
+            lines[0].set_ydata(brightnesses[:,0])
+            cv2.imshow('crop', imCrop)
+            plt.pause(0.001)
+            cv2.waitKey(1)
+
+
+        # Currently loaded images in LAB color space.
+        image_buffer = deque(maxlen=smoothing_window)
+        brightness_buffer = deque(maxlen=smoothing_window)
+        def read_image(filename):
+            im = cv2.imread(filename)
+            lab = cv2.cvtColor(im, cv2.COLOR_BGR2LAB)
+            imCrop = im[int(roi[1]):int(roi[1] + roi[3]), int(roi[0]):int(roi[0] + roi[2])]
+            b = np.round(np.mean(imCrop[:, :, 0]))
+            image_buffer.append(lab)
+            brightness_buffer.append(b)
+
+        def my_mean(a):
+            arr = np.array(a)
+            m = np.mean(arr, axis=0)
+            masked_output = np.ma.array(arr, mask=np.abs(arr - m) >= 2 * np.std(arr, axis=0)).mean(axis=0)
+            output = masked_output.data
+            output[masked_output.mask] = m[masked_output.mask]
+            return np.round(output).astype(np.uint8)
+
+        # Process the first n images.
+        for i in range(smoothing_window):
+            read_image(input_path_template % i)
+        smoothed_brightness = np.mean(brightness_buffer)
+        for i in range(middle_index):
+            lab = np.copy(image_buffer[i])
+            brightnesses[i, 1] = smoothed_brightness
+            lab[:, :, 0] = my_mean(image_buffer)[:, :, 0]
+            im = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+            cv2.imwrite(output_path_template % i, im)
+        # Process the main body of images.
+        for i in range(middle_index, self._imageCount - middle_index):
+            lab = np.copy(image_buffer[middle_index])
+            smoothed_brightness = np.mean(brightness_buffer)
+            brightnesses[i, 1] = smoothed_brightness
+            lab[:, :, 0] = my_mean(image_buffer)[:, :, 0]
+            im = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+            cv2.imwrite(output_path_template % i, im)
+
+            read_image(input_path_template % (i + middle_index))
+
+        # Process the last n images.
+        smoothed_brightness = np.mean(brightness_buffer)
+        for s, i in zip(range(middle_index), range(self._imageCount - middle_index, self._imageCount)):
+            lab = np.copy(image_buffer[s])
+            brightnesses[i, 1] = smoothed_brightness
+            lab[:, :, 0] = my_mean(image_buffer)[:, :, 0]
+            im = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+            cv2.imwrite(output_path_template % i, im)
+
+        # Plot brightness
+        lines[1].set_ydata(brightnesses[:, 1])
+        for i in range(139):
+            img = cv2.imread(output_path_template % i)
+            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            imCrop = lab[int(roi[1]):int(roi[1] + roi[3]), int(roi[0]):int(roi[0] + roi[2])]
+            brightnesses[i, 2] = np.mean(imCrop[:, :, 0])
+
+            lines[2].set_ydata(brightnesses[:, 2])
+            cv2.imshow('crop', imCrop)
+            plt.pause(0.001)
+            cv2.waitKey(1)
+
+
+
+    def _overlay_all_images(self, input_path_template, output_path_template):
+        if self._rendering.overlay_text_template is None or len(self._rendering.overlay_text_template.strip()) == 0:
+            return # TODO(Shadowen): Consider what happens when input_path != output_path.
 
         first_timestamp = float(self._snapshot_metadata[0]['time_taken'])
         for i, data in enumerate(self._snapshot_metadata):
@@ -500,14 +610,10 @@ class TimelapseRenderJob(object):
             # Extra metadata according to snapshot.METADATA_FIELDS.
             format_vars['snapshot_number'] = snapshot_number = int(data['snapshot_number'])
             assert (i == snapshot_number)
+            file_path = input_path_template % i
+
             format_vars['file_name'] = data['file_name']
             format_vars['time_taken_s'] = time_taken = float(data['time_taken'])
-
-            # Verify that the file actually exists.
-            file_path = os.path.join(self._capture_dir, self._snapshot_filename_template % snapshot_number)
-            if not os.path.isfile(file_path):
-                raise IOError("Cannot find file {}.".format(file_path))
-
             # Calculate time elapsed since the beginning of the print.
             format_vars['current_time'] = datetime.fromtimestamp(time_taken).strftime("%Y-%m-%d %H:%M:%S")
             format_vars['time_elapsed'] = str(timedelta(seconds=round(time_taken - first_timestamp)))
@@ -522,11 +628,10 @@ class TimelapseRenderJob(object):
                              overlay_location=self._rendering.overlay_text_pos,
                              text_color=self._rendering.overlay_text_color)
             # Save processed image.
-            output_path = os.path.join(preprocessed_directory, self._snapshot_filename_template % snapshot_number)
+            output_path = output_path_template % snapshot_number
             if not os.path.exists(os.path.dirname(output_path)):
                 os.makedirs(os.path.dirname(output_path))
             image.save(output_path)
-        self._debug.log_render_start("Preprocessing success!")
 
     def add_overlay(self, image, text_template, format_vars, font_path, font_size, overlay_location,
                     text_color):
@@ -657,8 +762,9 @@ class TimelapseRenderJob(object):
         filter_names = ['f' + str(x) for x in range(len(filters))] + ['out']
         for i, previous_filter_name, next_filter_name in zip(range(len(filters)), filter_names, filter_names[1:]):
             filters[i] = filters[i].format(prev_filter=previous_filter_name, next_filter=next_filter_name)
-        # Build the final filter string.
-        filter_string = "; ".join(filters)
+        else:
+            # Build the final filter string.
+            filter_string = "; ".join(filters)
 
         return filter_string
 
