@@ -20,12 +20,17 @@
 # You can contact the author either through the git-hub repository, or at the
 # following email address: FormerLurker@pm.me
 ##################################################################################
+import json
 import unittest
 from tempfile import NamedTemporaryFile
 
-from octoprint_octolapse.settings import OctolapseSettings, Rendering, InvalidSettingsKeyException, InvalidSettingsValueException
+from google.protobuf.json_format import MessageToJson, Parse
 
-import json
+from octoprint_octolapse.bin.python.point3d_pb2 import Point3D
+from octoprint_octolapse.bin.python.printer_settings_pb2 import PrinterSettings
+from octoprint_octolapse.settings import OctolapseSettings
+
+
 class TestSettings(unittest.TestCase):
     def setUp(self):
         self.octolapse_settings = OctolapseSettings(NamedTemporaryFile().name)
@@ -33,9 +38,62 @@ class TestSettings(unittest.TestCase):
     def tearDown(self):
         pass
 
-    def test_renderingSettings(self):
-        rendering = Rendering()
-        for k in ['guid', 'name', 'description', 'enabled', 'fps', 'output_format']:
-            self.assertIn(k, json.loads(rendering.to_json()))
-        rendering.update({'fps': 10})
-        self.assertRaises(InvalidSettingsKeyException, lambda: rendering.update({'keyDoesntExist': 'value'}))
+    def test_createPrinterSettings(self):
+        s = PrinterSettings()
+        self.assertEqual(s.name, "New Printer")
+
+    def test_editPrinterSettings(self):
+        s = PrinterSettings()
+        s.origin.x = 0
+        s.origin.y = 1
+        s.origin.z = 2
+
+        self.assertEqual(s.origin.x, 0)
+        self.assertEqual(s.origin.y, 1)
+        self.assertEqual(s.origin.z, 2)
+
+    def test_copyPrinterSettings(self):
+        s = PrinterSettings()
+        s.name = "My name"
+        s.description = "My description"
+
+        t = PrinterSettings()
+        t.CopyFrom(s)
+
+        self.assertEqual(t.name, "My name")
+        self.assertEqual(t.description, "My description")
+
+    def test_copyPrinterOrigin(self):
+        s = PrinterSettings()
+
+        p = Point3D(x=0, y=1, z=2)
+        s.origin.CopyFrom(p)
+
+        self.assertEqual(s.origin.x, 0)
+        self.assertEqual(s.origin.y, 1)
+        self.assertEqual(s.origin.z, 2)
+
+    def test_printerSettingsToJson(self):
+        s = PrinterSettings()
+        jsonObj = MessageToJson(s, including_default_value_fields=True)
+
+        # Attempt to parse the json object back in.
+        parsed = json.loads(jsonObj)
+        # Make sure some random fields are still there.
+        self.assertIn('name', parsed)
+        self.assertIn('description', parsed)
+        self.assertIn('snapshotCommand', parsed)
+        # Check the field values.
+        self.assertDictContainsSubset({'snapshotCommand': 'snap',
+                                       'autoPositionDetectionCommands': [],
+                                       'autoDetectPosition': True}, parsed)
+
+    def test_printerSettingsFromJson(self):
+        s = PrinterSettings()
+        Parse(
+            """{\n  "snapshotCommand": "snap", \n  "autoPositionDetectionCommands": [], \n  "autoDetectPosition": true, \n  "name": "New Printer", \n  "defaultFirmwareRetractionsZhop": false, \n  "xyzAxesDefaultMode": "REQUIRE_EXPLICIT", \n  "unitsDefault": "millimeters", \n  "axisSpeedDisplayUnits": "MM_MIN", \n  "eAxisDefaultMode": "REQUIRE_EXPLICIT", \n  "defaultFirmwareRetractions": false, \n  "overrideOctoprintPrintVolume": false, \n  "abortOutOfBounds": true, \n  "guid": 0, \n  "g90InfluencesExtruder": "USE_OCTOPRINT", \n  "printerPositionConfirmationTolerance": 0.0010000000474974513, \n  "primingHeight": 0.75, \n  "description": ""\n}"""
+            , s)
+
+        self.assertEqual(s.name, 'New Printer')
+        # Watch out! The Protobuf compiler converts between snake and camel case depending on the language.
+        self.assertEqual(s.snapshot_command, 'snap')
