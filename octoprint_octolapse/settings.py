@@ -21,6 +21,7 @@
 # following email address: FormerLurker@pm.me
 ##################################################################################
 
+import copy
 import json
 import logging
 import math
@@ -28,6 +29,7 @@ import uuid
 from datetime import datetime
 
 import concurrent
+
 import octoprint_octolapse.utility as utility
 
 PROFILE_SNAPSHOT_GCODE_TYPE = "gcode"
@@ -35,6 +37,7 @@ PROFILE_SNAPSHOT_GCODE_TYPE = "gcode"
 
 class Settings(object):
     # Secret key used to encode the class of the current object in JSON.
+    # Nobody checks, but don't use this key in any Settings object.
     class_key = '_class'
 
     def __init__(self, name, guid=None, **kwargs):
@@ -46,23 +49,28 @@ class Settings(object):
 
     def update(self, changes):
         """
-        :param changes: a partial dictionary reflecting the schema of the Settings object.
+        Updates the Settings object to match the changes object.
+        :param changes: An object of the same Settings class to copy from.
+                        Can also be a dictionary reflecting the part of the schema of the Settings object.
+        Deep-copies all values in `changes` to avoid pass-by-reference issues.
         """
         if issubclass(changes.__class__, self.__class__):
             # Update using an identical settings class.
-            return vars(self).update(vars(changes))
+            return vars(self).update({k: copy.deepcopy(v) for k, v in vars(changes).items()})
         elif hasattr(changes, 'items'):
             # Verify all changes have valid keys.
             for k, v in changes.items():
                 if k not in vars(self).keys():
                     raise InvalidSettingsKeyException(self.__class__, k, v)
             # Do a normal dict update.
-            return vars(self).update(changes)
+            return vars(self).update({k: copy.deepcopy(v) for k, v in changes.items()})
         # We don't know how to read data from this type.
         raise InvalidSettingsException(self.__class__,
                                        "Cannot use {} to update {}.".format(changes.__class__, self.__class__))
 
     class JSONEncoder(json.JSONEncoder):
+        """Handles encoding Settings objects as strings."""
+
         def default(self, obj):
             if isinstance(obj, dict):
                 return obj
@@ -76,13 +84,17 @@ class Settings(object):
             return json.JSONEncoder.default(self, obj)
 
     def to_json(self):
+        """Dumps the Settings object to a JSON-formatted string."""
         return json.dumps(self, cls=self.JSONEncoder)
 
     class JSONDecoder(json.JSONDecoder):
+        """Handles decoding Settings objects from JSON."""
+
         def __init__(self, *args, **kwargs):
             json.JSONDecoder.__init__(self, object_hook=self.object_hook, *args, **kwargs)
 
-        def object_hook(self, obj):
+        @staticmethod
+        def object_hook(obj):
             # Known classes.
             if Settings.class_key in obj:
                 # Remove the class key since we don't need it anymore.
@@ -98,11 +110,16 @@ class Settings(object):
             return obj
 
     @classmethod
-    def from_json(cls, str):
-        inst = json.loads(str, cls=cls.JSONDecoder)
+    def from_json(cls, s):
+        """
+        Loads the Settings object from a string. Can automatically detect and load Settings subclasses.
+        :param s: a string containing a JSON-formatted Settings object.
+        """
+        inst = json.loads(s, cls=cls.JSONDecoder)
         return inst
 
-    def __copy__(self):
+    def __deepcopy__(self):
+        """Deep copies a Settings object."""
         cp = self.__new__(self.__class__)
         cp.update(self)
         return cp
@@ -127,6 +144,7 @@ class InvalidSettingsKeyException(Exception):
 
     def __repr__(self):
         return "Tried to set {} in {} to {}.".format(self.key, self.settings_class, self.value)
+
 
 class PrinterSettings(Settings):
     def __init__(self, name="New Printer", **kwargs):
@@ -540,6 +558,7 @@ class CameraSettings(Settings):
             + "&group=" + str(group)
             + "&value={value}"
         )
+
 
 class DebugProfile(Settings):
     Logger = None
