@@ -38,7 +38,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 import octoprint_octolapse.utility as utility
 import snapshot
-from octoprint_octolapse.settings import Rendering
+from octoprint_octolapse.settings import RenderingSettings
 
 
 def is_rendering_template_valid(template, options):

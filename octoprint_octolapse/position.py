@@ -27,7 +27,7 @@ import math
 
 import octoprint_octolapse.utility as utility
 from octoprint_octolapse.gcode_parser import Commands
-from octoprint_octolapse.settings import Printer, Snapshot
+from octoprint_octolapse.settings import PrinterSettings, SnapshotSettings
 from octoprint_octolapse.extruder import Extruder
 
 

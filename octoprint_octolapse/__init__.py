@@ -43,7 +43,7 @@ import octoprint_octolapse.render as render
 import octoprint_octolapse.utility as utility
 from octoprint_octolapse.gcode_parser import Commands
 from octoprint_octolapse.render import RenderingCallbackArgs
-from octoprint_octolapse.settings import OctolapseSettings, Printer, Stabilization, Camera, Rendering, Snapshot, \
+from octoprint_octolapse.settings import OctolapseSettings, PrinterSettings, StabilizationSettings, CameraSettings, RenderingSettings, SnapshotSettings, \
     DebugProfile
 from octoprint_octolapse.timelapse import Timelapse, TimelapseState
 

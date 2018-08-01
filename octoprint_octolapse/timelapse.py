@@ -32,7 +32,7 @@ from octoprint_octolapse.gcode import SnapshotGcodeGenerator, SnapshotGcode
 from octoprint_octolapse.gcode_parser import Commands
 from octoprint_octolapse.position import Position
 from octoprint_octolapse.render import Render, RenderingCallbackArgs, RenderError
-from octoprint_octolapse.settings import (Printer, Rendering, Snapshot, OctolapseSettings)
+from octoprint_octolapse.settings import PrinterSettings, RenderingSettings, SnapshotSettings, OctolapseSettings
 from octoprint_octolapse.snapshot import CaptureSnapshot
 from octoprint_octolapse.trigger import Triggers
 
@@ -131,12 +131,12 @@ class Timelapse(object):
         self.OctoprintPrinterProfile = octoprint_printer_profile
         self.FfMpegPath = ffmpeg_path
         self.PrintStartTime = time.time()
-        self.Snapshot = Snapshot(self.Settings.current_snapshot())
+        self.Snapshot = SnapshotSettings(self.Settings.current_snapshot())
         self.Gcode = SnapshotGcodeGenerator(
             self.Settings, octoprint_printer_profile)
-        self.Printer = Printer(self.Settings.current_printer())
+        self.Printer = PrinterSettings(self.Settings.current_printer())
         self.Camera = self.Settings.current_camera()
-        self.Rendering = Rendering(self.Settings.current_rendering())
+        self.Rendering = RenderingSettings(self.Settings.current_rendering())
         self.CaptureSnapshot = CaptureSnapshot(
             self.Settings, self.DataFolder, print_start_time=self.PrintStartTime)
         self.Position = Position(

@@ -24,7 +24,7 @@ import json
 import unittest
 from tempfile import NamedTemporaryFile
 
-from octoprint_octolapse.settings import OctolapseSettings, Rendering, InvalidSettingsKeyException
+from octoprint_octolapse.settings import OctolapseSettings, RenderingSettings, InvalidSettingsKeyException
 
 
 class TestSettings(unittest.TestCase):
@@ -35,7 +35,7 @@ class TestSettings(unittest.TestCase):
         pass
 
     def test_renderingSettings(self):
-        rendering = Rendering()
+        rendering = RenderingSettings()
         # rendering.a_nested_class = Rendering(name='nested')
         # Check some values are set to defaults.
         self.assertNotEqual(rendering.guid, None)
@@ -44,7 +44,7 @@ class TestSettings(unittest.TestCase):
         # Check conversion to json.
         json_str = rendering.to_json()
         # ...and back from json.
-        parsed = Rendering.from_json(json_str)
+        parsed = RenderingSettings.from_json(json_str)
         for k in ['guid', 'name', 'description', 'enabled', 'fps', 'output_format']:
             self.assertIn(k, vars(parsed))
 
