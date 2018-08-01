@@ -21,11 +21,11 @@
 # following email address: FormerLurker@pm.me
 ##################################################################################
 
+import json
 import logging
 import math
 import sys
 import uuid
-import json
 from datetime import datetime
 
 import concurrent
@@ -880,32 +880,73 @@ class Snapshot(object):
 
 
 class Settings(object):
-    def __init__(self, guid, name):
-        self.guid = guid if guid else str(uuid.uuid4())
+    # Secret key used to encode the class of the current object in JSON.
+    class_key = '_class'
+
+    def __init__(self, name, guid=None, **kwargs):
+        # All instance variables must be JSON-encodable. If not, extend JSONEncoder in the subclass.
+        self.guid = guid if guid is not None else str(uuid.uuid4())
         self.name = name
+
+        self.update(kwargs)
 
     def update(self, changes):
         """
         :param changes: a partial dictionary reflecting the schema of the Settings object.
         """
-        if not isinstance(changes, self.__class__):
+        if issubclass(changes.__class__, self.__class__):
+            # Update using an identical settings class.
+            return vars(self).update(vars(changes))
+        elif hasattr(changes, 'items'):
             # Verify all changes have valid keys.
             for k, v in changes.items():
                 if k not in vars(self).keys():
                     raise InvalidSettingsKeyException(self.__class__, k, v)
-
-        # Apply changes.
-        vars(self).update(changes)
+            # Do a normal dict update.
+            return vars(self).update(changes)
+        # We don't know how to read data from this type.
+        raise InvalidSettingsException(self.__class__,
+                                       "Cannot use {} to update {}.".format(changes.__class__, self.__class__))
 
     class JSONEncoder(json.JSONEncoder):
         def default(self, obj):
-            if hasattr(obj, 'to_json'):
-                return obj.to_json()
+            if isinstance(obj, dict):
+                return obj
+            elif issubclass(obj.__class__, Settings):
+                d = {k: v for k, v in vars(obj).items()}
+                d.update({Settings.class_key: obj.__class__.__name__})
+                # Recursive call to make sure everything works fine.
+                return self.default(d)
+
             # Let the base class default method raise the TypeError
             return json.JSONEncoder.default(self, obj)
 
     def to_json(self):
-        return json.dumps(vars(self), cls=Settings.JSONEncoder)
+        return json.dumps(self, cls=self.JSONEncoder)
+
+    class JSONDecoder(json.JSONDecoder):
+        def __init__(self, *args, **kwargs):
+            json.JSONDecoder.__init__(self, object_hook=self.object_hook, *args, **kwargs)
+
+        def object_hook(self, obj):
+            # Known classes.
+            if Settings.class_key in obj:
+                # Remove the class key since we don't need it anymore.
+                class_name = obj.pop(Settings.class_key)
+                # Retrieve the correct class.
+                for subclass in Settings.__subclasses__():
+                    if subclass.__name__ == class_name:
+                        inst = subclass.__new__(subclass)
+                        inst.__init__(**obj)
+                        return inst
+
+            # It's a normal JSON object; follow normal JSON->Python guidelines.
+            return obj
+
+    @classmethod
+    def from_json(cls, str):
+        inst = json.loads(str, cls=cls.JSONDecoder)
+        return inst
 
     def __copy__(self):
         cp = self.__new__(self.__class__)
@@ -913,12 +954,19 @@ class Settings(object):
         return cp
 
 
+class InvalidSettingsException(Exception):
+    def __init__(self, settings_class, message):
+        Exception.__init__(self, message)
+        self.settings_class = settings_class
+        self.message = message
+
+
 class InvalidSettingsKeyException(Exception):
     def __init__(self, settings_class, key, value=None):
-        super(InvalidSettingsKeyException, self).__init__()
         self.settings_class = settings_class
         self.key = key
         self.value = value
+        Exception.__init__(self, self.__repr__())
 
     def __str__(self):
         return repr(self)
@@ -929,10 +977,10 @@ class InvalidSettingsKeyException(Exception):
 
 class InvalidSettingsValueException(Exception):
     def __init__(self, settings_class, key, value=None):
-        super(InvalidSettingsValueException, self).__init__()
         self.settings_class = settings_class
         self.key = key
         self.value = value
+        Exception.__init__(self, self.__repr__())
 
     def __str__(self):
         return repr(self)
@@ -942,8 +990,7 @@ class InvalidSettingsValueException(Exception):
 
 
 class Rendering(Settings):
-    def __init__(self, guid=None, name="Default Rendering"):
-        super(Rendering, self).__init__(guid, name)
+    def __init__(self, guid=None, name="Default Rendering", **kwargs):
         self.description = ""
         self.enabled = True
         self.fps_calculation_type = 'duration'
@@ -964,6 +1011,8 @@ class Rendering(Settings):
         self.overlay_font_size = 10
         self.overlay_text_pos = [10, 10]
         self.overlay_text_color = [255, 255, 255, 128]
+
+        super(Rendering, self).__init__(guid=guid, name=name, **kwargs)
 
 
 class Camera(object):

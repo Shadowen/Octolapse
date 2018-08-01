@@ -20,12 +20,13 @@
 # You can contact the author either through the git-hub repository, or at the
 # following email address: FormerLurker@pm.me
 ##################################################################################
+import json
 import unittest
 from tempfile import NamedTemporaryFile
 
-from octoprint_octolapse.settings import OctolapseSettings, Rendering, InvalidSettingsKeyException, InvalidSettingsValueException
+from octoprint_octolapse.settings import OctolapseSettings, Rendering, InvalidSettingsKeyException
 
-import json
+
 class TestSettings(unittest.TestCase):
     def setUp(self):
         self.octolapse_settings = OctolapseSettings(NamedTemporaryFile().name)
@@ -35,7 +36,16 @@ class TestSettings(unittest.TestCase):
 
     def test_renderingSettings(self):
         rendering = Rendering()
+        # rendering.a_nested_class = Rendering(name='nested')
+        # Check some values are set to defaults.
+        self.assertNotEqual(rendering.guid, None)
+        self.assertEqual(rendering.name, "Default Rendering")
+        self.assertEqual(rendering.fps_calculation_type, "duration")
+        # Check conversion to json.
+        json_str = rendering.to_json()
+        # ...and back from json.
+        parsed = Rendering.from_json(json_str)
         for k in ['guid', 'name', 'description', 'enabled', 'fps', 'output_format']:
-            self.assertIn(k, json.loads(rendering.to_json()))
-        rendering.update({'fps': 10})
+            self.assertIn(k, vars(parsed))
+
         self.assertRaises(InvalidSettingsKeyException, lambda: rendering.update({'keyDoesntExist': 'value'}))
